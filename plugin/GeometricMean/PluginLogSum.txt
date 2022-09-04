@@ -1,0 +1,2 @@
+logSum,libPluginLogSum.so
+logSum,logSum,operator,1,1,1

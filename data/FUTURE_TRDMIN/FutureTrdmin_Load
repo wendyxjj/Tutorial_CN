@@ -1,0 +1,36 @@
+login(`admin,`123456)
+dbPath = "dfs://FUTURE_TRDMIN"
+tableName = `FUTURE_TRDMIN
+rootDir="/mnt/data11/candle/Future"
+
+def loadCsvFromYearPath(path, dbPath, tableName){
+	products = files(path)[`filename]
+	for(product in products){
+		proPath = path + "/" + product
+		print proPath
+		fs = files(proPath)[`filename]
+		for(j in fs){
+			filePath = proPath + "/" + j
+			t=loadText(filePath)
+			database(dbPath).loadTable(tableName).append!(select product.upper(),symbol,exchange,cycle,trdingDay as tradingDay,date,datetimeParse(format(time,"000000000"),"HHmmssSSS"),open,high,low,close,long(volume),turnover,long(openInterest),unixTime from t )		
+		}
+	}
+}
+
+//dataPath = rootDir + "/2003"
+//loadCsvFromYearPath(dataPath, dbPath, tableName)
+
+//datanode alias
+nodesAlias="TL_NODE" + string(5..10)
+years= files(rootDir)[`filename]
+
+index = 0;
+for(year in years){	
+	yearPath = rootDir + "/" + year
+	print yearPath
+	des = "loadCsv_" + year
+	rpc(nodesAlias[index%nodesAlias.size()],submitJob,des,des,loadCsvFromYearPath,yearPath,dbPath,tableName)
+	index=index+1
+}
+
+//pnodeRun(getRecentJobs)

@@ -1,0 +1,98 @@
+login("admin", "123456")
+
+//loadPlugin("plugins/hdf5/PluginHdf5.txt")
+
+def createDBIfNotExists() {
+	if(existsDatabase("dfs://huachuang02")) return
+	dbDate = database("", VALUE, 2021.07.01..2021.07.31)
+	dbCode = database("", HASH, [SYMBOL, 20])
+	db = database("dfs://huachuang02", COMPO, [dbDate, dbCode])
+}
+
+def createTableIfNotExists() {
+	if(existsTable("dfs://huachuang02", "test")) return 
+	name = ["Date", "Code", "Time", "Side", "Price", "OrderItems", "ABItems", "ABVolume0", "ABVolume1", "ABVolume2", "ABVolume3", "ABVolume4", "ABVolume5", "ABVolume6", "ABVolume7", "ABVolume8", "ABVolume9", "ABVolume10", "ABVolume11", "ABVolume12", "ABVolume13", "ABVolume14", "ABVolume15", "ABVolume16", "ABVolume17", "ABVolume18", "ABVolume19", "ABVolume20", "ABVolume21", "ABVolume22", "ABVolume23", "ABVolume24", "ABVolume25", "ABVolume26", "ABVolume27", "ABVolume28", "ABVolume29",  "ABVolume30", "ABVolume31", "ABVolume32", "ABVolume33", "ABVolume34", "ABVolume35", "ABVolume36", "ABVolume37", "ABVolume38", "ABVolume39",  "ABVolume40", "ABVolume41", "ABVolume42", "ABVolume43", "ABVolume44", "ABVolume45", "ABVolume46", "ABVolume47", "ABVolume48", "ABVolume49"]
+	type = [DATE, SYMBOL, LONG, LONG, FLOAT, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG]
+	model = table(1:0, name, type)
+	database("dfs://huachuang02").createPartitionedTable(model, "test", `Date`Code)
+}
+
+def importData() {
+	ABVolume = ["ABVolume0", "ABVolume1", "ABVolume2", "ABVolume3", "ABVolume4", "ABVolume5", "ABVolume6", "ABVolume7", "ABVolume8", "ABVolume9", "ABVolume10", "ABVolume11", "ABVolume12", "ABVolume13", "ABVolume14", "ABVolume15", "ABVolume16", "ABVolume17", "ABVolume18", "ABVolume19", "ABVolume20", "ABVolume21", "ABVolume22", "ABVolume23", "ABVolume24", "ABVolume25", "ABVolume26", "ABVolume27", "ABVolume28", "ABVolume29",  "ABVolume30", "ABVolume31", "ABVolume32", "ABVolume33", "ABVolume34", "ABVolume35", "ABVolume36", "ABVolume37", "ABVolume38", "ABVolume39",  "ABVolume40", "ABVolume41", "ABVolume42", "ABVolume43", "ABVolume44", "ABVolume45", "ABVolume46", "ABVolume47", "ABVolume48", "ABVolume49"]
+	
+	createDBIfNotExists()
+	createTableIfNotExists()
+	//测试目录，使用时需要根据实际存储位置修改
+	filePath = "/hdd/hdd1/cwj/20210708.h5"
+	//取出时间
+	dt = temporalParse(split(filePath, "/").last().split(".").first(), "yyyyMMdd")
+
+	//列出文件中的dataset，返回的是一个表，数据有三列，列名是tableName，tableDims，tableType
+	t_dataset = hdf5::lsTable(filePath)
+
+	//dataset的tableName字段中第一到第九位是股票代码，从第十一位到最后是字段名称，把它们拆出来，做为两列附加到t_dataset，生成新表tb1
+	tb1 = select substr(tableName, 1, 9) as `code, substr(tableName, 11) as `colName, * from t_dataset
+
+	//把股票代码去重，得到所有且唯一的股票代码，存入向量codes
+	codes = exec distinct code from tb1
+	// codes = ["688788.sh"]
+	//获取分布式表的结构
+	t_dfs = loadTable("dfs://huachuang02", "test")
+	//根据分布式表的结构，创建内存表，下面按代码逐个读取数据，存入这个表
+	t_to_dfs = table(1000000:0, t_dfs.schema().colDefs.name, t_dfs.schema().colDefs.typeInt)
+
+	//遍历所有代码
+	for (cd in codes) {
+	
+		//t_tmp 是某个代码下面的所有字段
+		t_tmp = select * from tb1 where code = cd
+		//获取这个代码下的文件名，名字格式是代码加列名
+		tables = exec tableName from t_tmp
+		//获取所有字段名，这个字段名和上面的文件名是一一对应的
+		cols = exec colName from t_tmp
+
+		//根据字段数量生成一个临时数组，数组的每个元素是一个向量。
+		vec_tmp = array(ANY, tables.size())
+		
+		//print "正在导入股票代码为 " + cd + "的数据。"
+		
+		// 如果tableDims 为0，即表为空表，则不加载数据
+		if ((exec tableDims from t_tmp)[0] == "0") continue
+
+		//按照代码和字段逐个导入数据，并且按顺序放入vec_tmp
+		for (i in 0 : tables.size()) 
+		{
+	//		i = 0
+			if (cols[i] == "ABVolume") 
+			{
+				vec_tmp[i] = hdf5::loadHDF5(filePath, tables[i]).rename!(ABVolume)
+			}
+			else 
+			{
+				vec_tmp[i] = hdf5::loadHDF5(filePath, tables[i]).rename!(cols[i])
+			}
+		}
+		// 一列或多列为一表，多表合并为一表
+		t = reduce(table, vec_tmp)
+
+		// 添加Date、Code列，并填充数据
+		addColumn(t, `Date`Code, [DATE, SYMBOL])
+		replaceColumn!(t, `Date, take(dt, t.size()))
+		replaceColumn!(t, `Code, take(cd, t.size()))
+
+		// 调整列顺序并写入临时内存表
+		reorderColumns!(t, t_dfs.schema().colDefs.name)
+		t_to_dfs.append!(t)
+	}
+	t_dfs.append!(t_to_dfs)
+
+	undef(all)
+}
+
+timer importData()
+
+select count(*) from loadTable("dfs://huachuang02", "test")
+
+dropDatabase("dfs://huachuang02")
+
+

@@ -1,0 +1,51 @@
+//根据npz结构，创建内存表
+npz_table = table(100:0,`datetime`bids_price`bids_size`bids_size_in_coin`asks_price`asks_size`asks_size_in_coin,[NANOTIMESTAMP,DOUBLE[],DOUBLE[],DOUBLE[],DOUBLE[],DOUBLE[],DOUBLE[]])
+login(`admin,`123456)
+//创建数据库
+if(existsDatabase("dfs://db_amber_npz"))
+{
+	dropDatabase("dfs://db_amber_npz")
+}
+
+db_amber_npz = database(directory="dfs://db_amber_npz",partitionType=VALUE,partitionScheme=2020.02.21..2020.02.28,engine=`TSDB)
+//创建分布式表
+db_amber_npz.createPartitionedTable(table=npz_table,tableName=`npz,partitionColumns=`datetime,sortColumns=`datetime)
+
+//导入npz文件，tmp的类型是字典
+tmp = loadNpz("/home/ychan/data/amber/sample-binance-btcusdt-perp-orderbook.npz")
+tmp.keys()
+//解析npz文件
+asks = tmp.asks
+bids = tmp.bids
+len = asks.size()
+asks_price = array(ANY, len)
+asks_size = array(ANY, len)
+asks_size_in_coin = array(ANY, len)
+bids_price = array(ANY, len)
+bids_size = array(ANY, len)
+bids_size_in_coin = array(ANY, len)
+bids[0][0].size()
+bids[0].shape()
+for(i in 0:len){
+	m = asks[i]
+	n = bids[i]
+	bids_price[i] = n[0]
+	bids_size[i] = n[1]
+	print(bids_size[i])
+	bids_size_in_coin[i] = n[2]
+	asks_price[i] = m[0]
+	asks_size[i] = m[1]
+	asks_size_in_coin[i] = m[2]	
+}
+local_timestamp = tmp.local_timestamp
+//解析的数据写内存表
+insert into npz_table values(local_timestamp,bids_price,bids_size,bids_size_in_coin,asks_price,asks_size,asks_size_in_coin)
+
+//内存表写入数据库
+table_npz = loadTable("dfs://db_amber_npz",`npz)
+table_npz.append!(npz_table)
+
+//查看数据结果
+a = select count(*) from table_npz
+select top 10 * from table_npz
+select top 10 datetime,bids_price[0] as bids_price0 from table_npz

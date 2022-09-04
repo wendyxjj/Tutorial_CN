@@ -1,0 +1,44 @@
+def get_roll_price(roll_in, x, contract_month) {
+    expiry_day=8
+    mapping_monthcode_num=dict(`F`G`H`J`K`M`N`Q`U`V`X`Z, 1..12)
+    mapping_num_monthcode=dict(0..13,`Z`F`G`H`J`K`M`N`Q`U`V`X`Z`F)
+    mapping_year_num=dict(2020+1..10, 1..10)
+    // extract prefix and suffix
+    in_fix=select  *, substr(contract, strlen(contract)-2) as suffix, substr(contract, 0, strlen(contract)-2) as prefix from roll_in
+    dates_available=in_fix[`date]
+    roll_day=expiry_day - x
+    roll_begin_year=year(min(dates_available))
+    roll_begin_month=monthOfYear(min(dates_available))
+    roll_begin_date=temporalParse(string(roll_begin_year) + "." + string(roll_begin_month) + "." + string(roll_day),"y.M.d" )
+    min_date=min(dates_available)
+    // add a new column    // get the suffix after rolled by offesting dates to start at the first day of the month  
+    update  in_fix set  suffix_after_roll=string(mapping_num_monthcode[monthOfYear(date - roll_day + 1) + 1]) +string(mapping_year_num[year(date - roll_day + 1)])
+    // update suffix for contract month before roll date
+    update  in_fix set  suffix_after_roll=contract_month where   date between min_date:(roll_begin_date-1)
+    // update suffix for contract month after roll date
+    update  in_fix set suffix_after_roll=mapping_num_monthcode[mapping_monthcode_num[substr(contract_month, 0, 1)] + 1] + string(mapping_year_num[year(date - roll_day + 1)]) where   suffix_after_roll=contract_month and date>=roll_begin_date
+    res= select  * from  in_fix where   suffix=suffix_after_roll
+    factor_prepare=select  * from    in_fix where    (suffix >= contract_month or substr(suffix, 1) > substr(contract_month, 1)) and (date=min_date or dayOfMonth(date)=roll_day)
+        // keep roll days for valid contract only
+        
+  // remove invalid contracts at the first date
+    delete  from factor_prepare where   date=min_date and suffix!=contract_month
+    tmp_contract_ratio= select  date, contract, price, suffix, prefix, (1\ratios(price)) as forward_factor_inter from factor_prepare context by  prefix, date
+    contract_ratio=select  tmp_contract_ratio.*  from  ej(res, tmp_contract_ratio, `contract`suffix`date) where isDuplicated([prefix, suffix], FIRST)=false
+    
+    // update contract_ratio with first contract to be 1
+    update  contract_ratio set  forward_factor_inter = 1 where date = min(date)
+    // calculate final forward factor
+    forward_factor = select  *, cumprod(forward_factor_inter) as forward_factor from contract_ratio context by  prefix
+    // calculate the ratio of forward and backward
+    update  forward_factor set  forward_factor_inter = 1 / last(forward_factor) context by  prefix
+    // calculate final backward factor
+    factor=select  contract, forward_factor, (forward_factor_inter*forward_factor) as backward_factor from forward_factor
+   
+    roll_out= select  date, contract, price as original, price * forward_factor as forward, price * backward_factor as backward, forward_factor, backward_factor from lj(res, factor, `contract)
+    return roll_out
+}
+
+
+roll_in  = loadText("/home/xymao/data/roll.txt")
+roll_out = get_roll_price(roll_in, 4,  "G1")

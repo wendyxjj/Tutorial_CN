@@ -1,0 +1,17 @@
+roll_in = loadText("/home/xymao/data/future_rolling_in.csv")
+roll_out1 = loadText("/home/xymao/data/future_rolling_out.csv")
+
+def getfactor(roll_in){
+    in_prefix=select *,substr(contract,0,3) as contract_prefix from roll_in
+    target_contract=select*  from in_prefix  context by contract_prefix having isDuplicated([date],NONE) = true or date=min(date) //extract target contract from table to calculate factor
+    contract_ratio=select date, contract, price, contract_prefix,(1\ratios(price)) as forward_factor_inter from target_contract context by contract_prefix,date //calculate ratio of contracts when it's rolling date
+    update contract_ratio set forward_factor_inter=1 where  date=min(date) //let first contract be 1
+    forward_factor=select *, cumprod(forward_factor_inter) as forward_factor from contract_ratio where  forward_factor_inter!=NULL context by contract_prefix //calculate final forward factor
+    update forward_factor set forward_factor_inter = first(forward_factor)/last(forward_factor) context by contract_prefix //calculate the ratio of forward and backward
+    factor=select contract, forward_factor, (forward_factor_inter*forward_factor) as backward_factor from forward_factor //calculate final backward factor
+    return factor
+}
+
+in_prefix=select *,substr(contract,0,3) as contract_prefix from roll_in 
+res1=select*  from in_prefix  context by contract_prefix having isDuplicated([date],LAST) = false
+roll_out=select date, contract, price as original,price*forward_factor as forward,price*backward_factor as backward from  lj(res1,getfactor(roll_in),`contract)

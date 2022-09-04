@@ -1,0 +1,93 @@
+def getPrevDataPoint(res_inter, start_date, rawDataTable){
+	firstDataPoints = select min(datetime) as datetime from res_inter group by contract
+ 	firstDataPoint = select * from firstDataPoints where time(datetime) != 0
+
+ 	f=def(contractRow, start_date, rawDataTable){
+		  endDate = contractRow.datetime.date() - 1
+		  curContract = contractRow.contract
+		  result = select max(time) as datetime, last(sym) as contract, atImax(time, price) as price from rawDataTable where date = endDate, sym=curContract
+		  if(result.datetime.count() == 0){
+		   	result = select max(time) as datetime, last(sym) as contract, atImax(time, price) as price from rawDataTable where date between start_date : endDate, sym=curContract
+		  }
+		   if(result.datetime.count() == 0)
+		   	return NULL
+		  else
+		  	return result
+	 }
+ 	return  ploop(f{, start_date, rawDataTable}, firstDataPoint).unionAll(false)
+}
+
+def generateTimeSeries(contractRow){
+	datetime =  contractRow.startTime +10000l * (0 .. ((contractRow.endTime - contractRow.startTime)/10000))
+	return table(datetime, take(contractRow.contract, datetime.size()) as contract)
+}
+
+def filterActivePrice(db_path, table_name, start_date, end_date, days_to_expiry, contract_month, prefix) {
+    	contracts = ()
+   	 for(month_code in `F`G`H`J`K`M`N`Q`U`V`X`Z) {
+        		for (y in 0..9) {
+            		contracts.append!(prefix + month_code + y)
+        		}
+    	}
+    // generate two dictionaries to map contract month to contract end date and contract start date, respectively
+    	month_codes = ["F", "G", "H", "J", "K", "M", "N", "Q", "U", "V", "X", "Z"]
+	months = seq(month(start_date) - 2, month(end_date) + 2)
+    	contract_code = month_codes[months % 12] + string(months / 12 % 10)
+    	contract_end_date = months.date() +  7 - days_to_expiry
+    	contract_start_date = (months - 1).date() + 7 - days_to_expiry
+    	if(!contract_month.startsWith("F")) {
+       		int_year = int(contract_month.right(1)) + year(start_date) / 10 % 200 * 10 + 2000
+        		int_month = month_codes.find(contract_month.left(1))
+        		sub_month = int_month - (month(start_date) % 12)
+        		cur_month = month(int_month + int_year * 12)
+        		contract_end_date = iif(months == cur_month, temporalAdd(contract_end_date, -sub_month, "M"), contract_end_date)
+        		contract_start_date = iif(months between pair(cur_month, cur_month+1), temporalAdd(contract_start_date, -sub_month, "M"), contract_start_date)
+        		contract_start_date = iif(months between pair(month(int_year * 12), cur_month - 1), temporalAdd(contract_start_date, 1, "y"), contract_start_date)
+    	}
+    	contract_end = dict(contract_code, contract_end_date)
+    	contract_start = dict(contract_code, contract_start_date)
+
+    	res_inter = select last(price) as price from  loadTable(db_path, table_name) where   date between start_date : end_date and sym in contracts and time <= timestamp(contract_end[sym.right(2)])+ 1000 * 10 - 1 and time >= timestamp(contract_start[sym.right(2)])  group by date, sym as contract, bar(time, 10s) as datetime
+    
+    	res_inter.drop!(`date)
+
+    	append_table_end = select  distinct(contract) as contract from res_inter
+    	append_table_start = append_table_end.copy()
+    	update  append_table_end set datetime = timestamp(contract_end[contract.right(2)]) + 1000 * 10, price = double()
+    	append_table_end = select  timestamp(datetime) as datetime, contract, price from append_table_end
+    	append_table_end = select  contract, datetime, price from append_table_end where   datetime between timestamp(start_date) : timestamp(end_date) and datetime <= timestamp(contract_end[contract.right(2)]) + 1000 * 10 and datetime >= timestamp(contract_start[contract.right(2)]) + 1000 * 10
+
+    	res_inter.append!(append_table_end)
+    	update  append_table_start set date = contract_start[contract.right(2)], price=double()
+    	append_table_start = select  contract, timestamp(date) as datetime, price from append_table_start
+
+	starting_data = getPrevDataPoint(res_inter, start_date,  loadTable(db_path, table_name) ).reorderColumns!(`contract`datetime`price)
+
+ 	res_inter = starting_data.unionAll(res_inter)
+
+	fj_inter=select max(start_date.timestamp(), append_table_start.datetime) as startTime, append_table_end.datetime.nullFill(end_date.timestamp()) as endTime, contract from fj(append_table_start,append_table_end, `contract) order by append_table_start.datetime
+
+	left_table = loop(generateTimeSeries, fj_inter).unionAll(false)
+	res= (select datetime, contract, price, contract_end[contract.right(2)] as order_contract from aj(left_table, res_inter, `contract`datetime)).sortBy!("order_contract")
+	return res
+}
+
+
+login("admin", "123456")
+db_path = "dfs://demo_complete_dates"
+table_name = "trades"
+start_date = 2015.03.01
+end_date = 2020.02.05
+days_to_expiry = 4
+contract_month = "N5"
+prefix = "CL"
+
+timer{
+roll_in = filterActivePrice(db_path, table_name, start_date, end_date, days_to_expiry, contract_month, prefix)
+tmp = select datetime, contract, datetime.next() as nextDate, price, accumulate(*, iif(datetime == datetime.prev(), price.prev()/price, NULL), 1.0) as forwardFactor, accumulate(*, iif(datetime == datetime.next(), price.next()/price, NULL).reverse(), 1.0).reverse() as backwardFactor from roll_in where   price != NULL context by left(contract, contract.strlen() - 2)
+
+tmp2 = select  datetime, contract, price as original, price * forwardFactor as forward, price * backwardFactor as backward, forwardFactor, backwardFactor from    tmp where   datetime != nextDate
+result = select  temporalAdd(datetime, 10, "s") as datetime, contract, original, forward, backward, forwardFactor, backwardFactor from tmp2
+}
+
+fr_v2=select first(datetime) as datetime, first(contract) as contract, prefix, forwardFactor, backwardFactor from result group by contract, left(contract, contract.strlen() - 2 ) as prefix, forwardFactor, backwardFactor order by prefix, datetime

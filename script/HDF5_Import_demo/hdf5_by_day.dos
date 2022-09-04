@@ -1,0 +1,36 @@
+use hdf5
+login(`admin,`123456)
+
+if (existsDatabase("dfs://dataImportTrans"))
+{
+	dropDatabase("dfs://dataImportTrans")
+}
+db1 = database("", VALUE, 2020.01.01..2020.12.31)
+db2 = database("", HASH,[SYMBOL,20])
+db = database("dfs://dataImportTrans",COMPO, [db1,db2])
+
+dataFilePath = "/hdd/hdd1/hdf5/tianfeng/20200708.h5"
+datasetTable = hdf5::lsTable(dataFilePath)
+datasetName = "/StockTransaction/20200708"
+schema=hdf5::extractHDF5Schema(dataFilePath,datasetName)
+
+colNames=schema[`name]
+colTypes=[DATE,INT,INT,SYMBOL,SYMBOL,TIME,TIME,TIME,LONG,LONG,DOUBLE,INT,INT,SYMBOL]
+t=table(1:0,colNames,colTypes)
+transpt=db.createPartitionedTable(t,`transpt,`TradeDate`SecID)
+
+def  typeConversion(mutable t){
+	return t.replaceColumn!(`TradeDate,datetimeParse(string(t.TradeDate),"yyyyMMdd")).replaceColumn!(`LocalTime,datetimeParse(string(t.LocalTime),"HmmssSSS")).replaceColumn!(`TradeTime,datetimeParse(string(t.TradeTime),"HmmssSSS")).replaceColumn!(`ExTime,datetimeParse(string(t.ExTime),"HmmssSSS"))
+}
+
+lst=hdf5::lsTable(dataFilePath)
+for(datasetName in lst[`tableName])    
+{
+	hdf5::loadHDF5Ex(db,`transpt,`TradeDate`SecID,dataFilePath,datasetName,,,,typeConversion)
+}
+
+transpt=loadTable("dfs://dataImportTrans","transpt")
+select count(*) from transpt group by ExID,SecID
+select  * from transpt where secID=`600009 
+select sum(Volume) as v1, sum(Volume * (Type=110)) as bv,sum(Volume * (Type=1)) as sv from  transpt where secID=`600009
+

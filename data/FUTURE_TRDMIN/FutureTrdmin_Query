@@ -1,0 +1,49 @@
+login(`admin,`123456)
+dbPath = "dfs://FUTURE_TRDMIN"
+tableName = `FUTURE_TRDMIN
+
+t = database(dbPath).loadTable(tableName)
+select count(*) from t
+
+select count(*) as cnt from t group by product, tradingDay order by cnt
+
+select top 1000 * from t where tradingDay > 2018.01.01,cycle=1
+
+timer select * from t where product = "AU", tradingDay > 2016.06.30;
+select count(*) from t where product = "AG" and tradingDay > 2016.06.30 group by tradingDay;
+
+timer select * from t where product = "AU", tradingDay > 2016.06.30;
+timer select max(open),min(high),sum(low),avg(volume),std(close),max(turnover),max(cycle), min(time), max(unixTime), max(date), max(exchange) from t where product = "AU", tradingDay > 2016.06.30;
+
+
+schema(t)
+
+select count(*) from t where product = "AG" , tradingDay > 2016.06.30;
+
+timer select * from t where product = "SR", tradingDay between 2012.06.31 : 2017.01.01;
+timer select * from t where product = "RB",symbol='rb1705';
+timer select * from t where product = "CF",tradingDay between 2016.05.18 : 2017.11.21,symbol='CF705';
+
+//select count(*) from t where tradingDay between 2003.01.01 : 2010.01.01;
+//select count(*) from t where tradingDay between 2010.01.01 : 2020.01.01;
+//select * from t where tradingDay = 2018.01.03 and symbol = `rb1805 and cycle = 1 order by unixTime;
+//select * from t where tradingDay = 2018.01.03 and symbol = `rb1805  order by cycle, unixTime;
+// a = pnodeRun(getAllChunks);
+// select count(*) from a where dfsPath like "/futures/%"
+//
+// timer select * from t where tradingDay between 2016.01.03 : 2018.01.31 and product = `RU order by cycle, unixTime;
+
+
+ timer select avg(volume) as typ from t  where product = "A";
+
+ timer select avg(volume), max(close) from t where product="RU" group by tradingDay 
+
+  timer select sum(turnover) from t where product="IF"
+
+  timer select std(open) from t where product = "ZN" group by tradingDay
+
+  select * from where product = "AG" where tradingDay between 2018.01.02 :
+
+
+  t = pnodeRun(getRecentJobs)
+select * from t where startTime >2018.09.21T14:07:00.000

@@ -1,0 +1,96 @@
+login("admin", "123456")
+
+// loadPlugin("plugins/hdf5/PluginHdf5.txt")
+
+def createDBIfNotExists() 
+{
+	if(existsDatabase("dfs://huachuang03"))
+	{
+		return
+	}
+	dbDate = database("", VALUE, 2021.07.01..2021.07.31)
+	dbCode = database("", HASH, [SYMBOL, 20])
+	db = database("dfs://huachuang03", COMPO, [dbDate, dbCode])
+}
+
+def createTableIfNotExists() 
+{
+	if(existsTable("dfs://huachuang03", "test")) 
+	{
+		return 
+	}
+	name = ["Date", "Code", "Volume", "Time", "Price", "OrderKind", "Index", "FunctionCode", "Channel", "BizIndex", "BidOrder", "BSFlag", "AskOrder"]
+	type = [DATE, SYMBOL, LONG, LONG, FLOAT, STRING, LONG, STRING, LONG, LONG, LONG, STRING, LONG]
+	model = table(1:0, name, type)
+	database("dfs://huachuang03").createPartitionedTable(model, "test", `Date`Code)
+}
+
+def importData() 
+{
+    //建库建表
+	createDBIfNotExists()
+	createTableIfNotExists()
+	
+	
+	filePath = "/hdd/hdd1/cwj/20210712.h5"
+	//取出时间
+	dt = temporalParse(split(filePath, "/").last().split(".").first(), "yyyyMMdd")
+	//列出文件中的dataset，返回的是一个表，数据有三列，列名是tableName，tableDims，tableType	
+	t_dataset = hdf5::lsTable(filePath)
+	
+	//dataset中第一到第九位是股票代码，从第十一位到最后是字段名称，它们拆出来，做为两列附加到t_dataset，生成新表tb1
+	tb1 = select substr(tableName, 1, 9) as `code, substr(tableName, 11) as `colName, * from t_dataset
+	
+	//把股票代码去重，得到所有且唯一的股票代码，存入向量codes
+	codes = exec distinct code from tb1
+    
+    //获取分布式表的结构
+	t_dfs = loadTable("dfs://huachuang03", "test")
+	
+	//根据分布式表的结构，创建内存表，下面按代码逐个读取数据，存入这个表
+	t_to_dfs = table(1000000:0, t_dfs.schema().colDefs.name, t_dfs.schema().colDefs.typeInt)
+	
+	//遍历所有代码
+	for (cd in codes) 
+	{
+	    //t_tmp 是某个代码下面的所有字段
+		t_tmp = select * from tb1 where code = cd
+		//获取这个代码下的文件名，名字格式是代码加列名
+		tables = exec tableName from t_tmp
+		//获取所有字段名，这个字段名和上面的文件名是一一对应的
+		cols = exec colName from t_tmp
+		//根据字段数量生成一个临时数组，数组的每个元素是一个向量。
+		vec_tmp = array(ANY, tables.size())
+
+        // 如果tableDims 为0，即表为空表，则不加载数据
+		if ((exec tableDims from t_tmp)[0] == "0") 
+		{
+			continue
+		}
+		
+		//按照代码和字段逐个导入数据，并且按顺序放入vec_tmp
+		for (i in 0 : tables.size()) 
+		{
+			vec_tmp[i] = hdf5::loadHDF5(filePath, tables[i]).rename!(cols[i])
+		}
+		
+		// 一列或多列为一表，多表合并为一表
+		t = reduce(table, vec_tmp)
+		
+		// 添加Date、Code列，并填充数据
+		addColumn(t, `Date`Code, [DATE, SYMBOL])
+		replaceColumn!(t, `Date, take(dt, t.size()))
+		replaceColumn!(t, `Code, take(cd, t.size()))
+		// 调整列顺序并写入临时内存表
+		reorderColumns!(t, t_dfs.schema().colDefs.name)
+		t_to_dfs.append!(t)
+	}
+	t_dfs.append!(t_to_dfs)
+
+	undef(all)
+}
+
+importData()
+//测试导入结果
+select count(*) from loadTable("dfs://huachuang03", "test")
+

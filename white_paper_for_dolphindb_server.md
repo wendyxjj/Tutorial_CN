@@ -1,0 +1,2 @@
+## white_paper_for_dolphindb_server
+white_paper_for_dolphindb_server

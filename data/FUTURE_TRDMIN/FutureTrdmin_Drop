@@ -1,0 +1,7 @@
+login("admin","123456")
+dbPath = "dfs://FUTURE_TRDMIN"
+tableName = `FUTURE_TRDMIN
+
+dropDatabase(dbPath)
+
+existsDatabase(dbPath)

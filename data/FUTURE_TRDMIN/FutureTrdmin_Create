@@ -1,0 +1,22 @@
+login(`admin,`123456)
+dbPath = "dfs://FUTURE_TRDMIN"
+tableName = `FUTURE_TRDMIN
+rootDir="/mnt/data11/candle/Future"
+yearRange =date(2003.01M + 12*0..27)
+
+//生成所有的products
+products = array(SYMBOL, 0, 100)
+yearDirs = files(rootDir)[`filename]
+for(yearDir in yearDirs){
+	path = rootDir + "/" + yearDir
+	products.append!(files(path)[`filename].upper())
+}
+products = products.distinct().sort();
+products
+
+dbDate=database("", RANGE, yearRange)
+dbID=database("", VALUE, products)
+
+db = database(dbPath, COMPO, [dbDate, dbID])
+pt=db.createPartitionedTable(table(1000000:0, `product`symbol`exchange`cycle`tradingDay`date`time`open`high`low`close`volume`turnover`oi`unixTime, [SYMBOL,SYMBOL,SYMBOL,INT,DATE,DATE,TIME,DOUBLE,DOUBLE,DOUBLE,DOUBLE,LONG,DOUBLE,LONG,LONG]), tableName, `tradingDay`product)
+

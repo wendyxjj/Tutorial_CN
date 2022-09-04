@@ -1,0 +1,29 @@
+def filterActivePrice(rawPrice, start_date, end_date, daysToExpiry, contractMonth){
+	//generate two dictionaries to map contract month to contract end date and contract start date, respectively
+	monthCodes = ["F", "G", "H", "J", "K", "M", "N", "Q", "U", "V", "X", "Z"]
+	months = seq(month(start_date) - 2, month(end_date) + 2)
+	contractCode = monthCodes[months % 12] + string(months / 12 % 10)
+	contractEndDate = months.date() +  7 - daysToExpiry
+	contractStartDate = (months - 1).date() + 7 - daysToExpiry
+	if(!contractMonth.startsWith("F")){
+		intYear = int(contractMonth.right(1)) + 2020
+		intMonth = monthCodes.find(contractMonth.left(1))
+		curMonth = month(intMonth + intYear * 12)
+		contractEndDate = iif(months == curMonth, temporalAdd(contractEndDate, -intMonth, "M"), contractEndDate)
+		contractStartDate = iif(months between pair(curMonth, curMonth+1), temporalAdd(contractStartDate, -intMonth, "M"), contractStartDate)
+		contractStartDate = iif(months between pair(month(intYear*12), curMonth - 1), contractStartDate + 366, contractStartDate)
+	}
+	contractEnd = dict(contractCode, contractEndDate)
+	contractStart = dict(contractCode, contractStartDate)
+	
+	return select * from rawPrice where date between start_date : end_date, date <= contractEnd[contract.right(2)], date >= contractStart[contract.right(2)]
+}
+
+rawPrice = loadText("/home/xymao/data/roll.txt")
+roll_in = filterActivePrice(rawPrice, 2021.01.01, 2021.02.28, 4, "G1")
+
+tmp = select date, contract, date.next() as nextDate, price, accumulate(*, iif(date == date.prev(), price.prev()/price, NULL), 1.0) as forwardFactor, 
+	accumulate(*, iif(date == date.next(), price.next()/price, NULL).reverse(), 1.0).reverse() as backwardFactor 
+	from roll_in context by left(contract, contract.strlen() - 2)
+
+select date, contract, price as original, price * forwardFactor as forward, price*backwardFactor as backward, forwardFactor, backwardFactor from tmp where date != nextDate
